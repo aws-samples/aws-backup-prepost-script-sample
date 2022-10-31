@@ -1,0 +1,268 @@
+{
+    "Comment": "A state machine that deploys a lambda cloudformation stack",
+    "StartAt": "ValidateInput",
+    "States": {
+     "ValidateInput": {
+        "Type": "Task",
+        "OutputPath": "$",
+        "Resource": "${PrePostInputValidatorLambdaArn}",
+        "Next": "RunPreBackupScript?"
+        },
+    "RunPreBackupScript?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.RunPreBackupScript",
+            "BooleanEquals": true,
+            "Next": "ExecutePreBackupScript"
+        }
+        ],
+        "Default": "isStopEC2InstanceRequired?"
+    },
+    "ExecutePreBackupScript": {
+        "Type": "Task",
+        "Parameters": {
+          "currentStep": "RunPreBackupScript",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${PrePostBackupScriptExecutorLambdaArn}",
+        "Next": "AwaitPreScriptExecution"
+        },
+    "CheckPreScriptExecutionStatus": {
+        "Type": "Task",
+      "Parameters": {
+          "currentStep": "CheckPreBackupScriptStatus",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${CheckScriptExecutionStatusLambdaArn}",
+        "Next": "IsPreScriptExecutionComplete?"
+    },
+    "IsPreScriptExecutionComplete?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.RemoteRunCommandDetails.PreBackupScriptDetails.PreBackupScriptExecution.Status",
+            "StringEquals": "Success",
+            "Next": "isStopEC2InstanceRequired?"
+        }
+        ],
+        "Default": "AwaitPreScriptExecution"
+    },
+    "isStopEC2InstanceRequired?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.StartStopEC2Required",
+            "BooleanEquals": true,
+            "Next": "StopEC2Instance"
+        }
+        ],
+        "Default": "BackupWorkflow"
+    },
+    "StopEC2Instance": {
+        "Type": "Task",
+        "Parameters": {
+          "desiredState": "stop",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${StartStopEC2InstanceLambdaArn}",
+        "Next": "CheckEC2StoppedStatus"
+    },
+    "CheckEC2StoppedStatus": {
+        "Type": "Task",
+        "Parameters": {
+          "desiredState": "stopped",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${StartStopEC2InstanceLambdaArn}",
+        "Next": "isEC2Stopped?"
+    },
+    "isEC2Stopped?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.InstanceDesiredState",
+            "StringEquals": "stopped",
+            "Next": "BackupWorkflow"
+        }
+        ],
+        "Default": "AwaitDesiredEC2StopState"
+    },
+    "isStartEC2InstanceRequired?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.StartStopEC2Required",
+            "BooleanEquals": true,
+            "Next": "StartEC2Instance"
+        }
+        ],
+        "Default": "RunPostBackupScript?"
+    },
+    "StartEC2Instance": {
+        "Type": "Task",
+        "Parameters": {
+          "desiredState": "start",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${StartStopEC2InstanceLambdaArn}",
+        "Next": "CheckEC2RunningStatus"
+    },
+    "CheckEC2RunningStatus": {
+        "Type": "Task",
+        "Parameters": {
+          "desiredState": "running",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${StartStopEC2InstanceLambdaArn}",
+        "Next": "isEC2Running?"
+    },
+    "isEC2Running?": {
+      "Type": "Choice",
+      "Choices": [
+      {
+          "Variable": "$.InstanceDesiredState",
+          "StringEquals": "running",
+          "Next": "RunPostBackupScript?"
+      }
+      ],
+      "Default": "AwaitDesiredEC2StartState"
+  },
+    "RunPostBackupScript?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.RunPostBackupScript",
+            "BooleanEquals": true,
+            "Next": "ExecutePostBackupScript"
+        }
+        ],
+        "Default": "SaveWorkflowStateToDynamoDB"
+    },
+    "BackupWorkflow": {
+        "Type": "Map",
+        "InputPath": "$",
+        "ItemsPath": "$.BackupDetails",
+        "ResultPath": "$.BackupDetails",
+        "OutputPath": "$",
+        "Iterator": {
+          "StartAt": "RunBackupJob",
+          "States": {
+            "RunBackupJob": {
+              "Type": "Task",
+              "Resource": "${RunBackupJobLambdaArn}",
+              "End": true
+            }
+          }
+        },
+        "Next": "AwaitBackupJobCompletion"
+    },
+    "AwaitPreScriptExecution": {
+        "Type": "Wait",
+        "Seconds": 1,
+        "Next": "CheckPreScriptExecutionStatus"
+    },
+    "AwaitDesiredEC2StopState": {
+        "Type": "Wait",
+        "Seconds": 10,
+        "Next": "CheckEC2StoppedStatus"
+        },
+    "AwaitDesiredEC2StartState": {
+        "Type": "Wait",
+        "Seconds": 10,
+        "Next": "CheckEC2RunningStatus"
+        },
+    "AwaitPostScriptExecution": {
+        "Type": "Wait",
+        "Seconds": 1,
+        "Next": "CheckPostScriptExecutionStatus"
+    },
+    "AwaitBackupJobCompletion": {
+        "Type": "Wait",
+        "Seconds": 10,
+        "Next": "CheckBackupJobStatus"
+        },
+    "CheckBackupJobStatus": {
+        "Type": "Task",
+        "OutputPath": "$",
+        "Resource": "${CheckBackupJobStatusLambdaArn}",
+        "Next": "IsBackupJobComplete?"
+    },
+    "IsBackupJobComplete?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.BackupJobsStatus",
+            "StringEquals": "complete",
+            "Next": "isStartEC2InstanceRequired?"
+        },
+        {
+            "Variable": "$.BackupJobsStatus",
+            "StringEquals": "error",
+            "Next": "FailState"
+        }
+        ],
+        "Default": "AwaitBackupJobCompletion"
+    },
+      "ExecutePostBackupScript": {
+        "Type": "Task",
+        "Parameters": {
+          "currentStep": "RunPostBackupScript",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${PrePostBackupScriptExecutorLambdaArn}",
+        "Next": "AwaitPostScriptExecution"
+        },
+    "CheckPostScriptExecutionStatus": {
+        "Type": "Task",
+      "Parameters": {
+          "currentStep": "CheckPostBackupScriptStatus",
+          "event.$": "$"
+        },
+        "OutputPath": "$",
+        "Resource": "${CheckScriptExecutionStatusLambdaArn}",
+        "Next": "IsPostScriptExecutionComplete?"
+    },
+    "IsPostScriptExecutionComplete?": {
+        "Type": "Choice",
+        "Choices": [
+        {
+            "Variable": "$.RemoteRunCommandDetails.PostBackupScriptDetails.PostBackupScriptExecution.Status",
+            "StringEquals": "Success",
+            "Next": "SaveWorkflowStateToDynamoDB"
+        }
+        ],
+        "Default": "AwaitPostScriptExecution"
+    },
+    "SaveWorkflowStateToDynamoDB": {
+      "Type": "Task",
+      "Resource": "${DDBPutItem}",
+      "ResultPath": "$.output_from_ddb_put",
+      "Parameters": {
+        "TableName": "${DDBTable}",
+        "Item": {
+          "SM_Execution_ID.$": "$$.Execution.Id",
+          "WorkFlow_Output.$": "States.JsonToString($)",
+          "Workflow_Overall_Status.$": "States.JsonToString($.Workflowlog)",
+          "StartTime.$": "$.StartTime",
+          "EndTime.$": "$.EndTime"
+        }
+      },
+      "Next": "WorkflowSucceeded"
+    },
+    "WorkflowSucceeded": {
+        "Type": "Succeed"
+    },
+    "FailState": {
+        "Type": "Fail",
+        "Error": "Workflow Failed"
+    }
+    }
+  }

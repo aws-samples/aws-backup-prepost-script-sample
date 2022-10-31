@@ -1,0 +1,341 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform:
+  - AWS::Serverless-2016-10-31
+  - AWS::LanguageExtensions
+Description: >
+  backupsolution-prepost
+
+  Sample SAM Template for backupsolution-prepost
+
+Resources:
+  BackupWorkflowStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      DefinitionUri: statemachine/prepostbackupstepfunction.json
+      DefinitionSubstitutions:
+        PrePostInputValidatorLambdaArn: !GetAtt PrePostInputValidatorLambda.Arn
+        StartStopEC2InstanceLambdaArn: !GetAtt StartStopEC2InstanceLambda.Arn
+        PrePostBackupScriptExecutorLambdaArn: !GetAtt PrePostBackupScriptExecutorLambda.Arn
+        CheckScriptExecutionStatusLambdaArn: !GetAtt CheckScriptExecutionStatusLambda.Arn
+        RunBackupJobLambdaArn: !GetAtt RunBackupJobLambda.Arn
+        CheckBackupJobStatusLambdaArn: !GetAtt CheckBackupJobStatusLambda.Arn
+        DDBPutItem: !Sub arn:${AWS::Partition}:states:::dynamodb:putItem
+        DDBTable: !Ref TransactionTable
+      Events:
+        BackupSchedule:
+          Type: Schedule
+          Properties:
+            Description: Schedule to run the stock trading state machine every hour
+            Enabled: False
+            Schedule: "rate(1 day)"
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PrePostInputValidatorLambda      
+        - LambdaInvokePolicy:
+            FunctionName: !Ref StartStopEC2InstanceLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref PrePostBackupScriptExecutorLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CheckScriptExecutionStatusLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref RunBackupJobLambda
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CheckBackupJobStatusLambda
+        - DynamoDBWritePolicy:
+            TableName: !Ref TransactionTable
+
+  PrePostInputValidatorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/prepost_input_validator/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - Statement:
+          - Sid: StartStopEc2Policy
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+            Resource: '*'
+      Architectures:
+        - x86_64
+        
+  StartStopEC2InstanceLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/start_stop_ec2/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - Statement:
+          - Sid: StartStopEc2Policy
+            Effect: Allow
+            Action:
+              - ec2:StartInstances
+              - ec2:StopInstances
+              - ec2:DescribeInstances
+            Resource: '*'
+      Architectures:
+        - x86_64
+
+  PrePostBackupScriptExecutorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/pre_post_script/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - Statement:
+          - Sid: RunSSMCommandPolicy
+            Effect: Allow
+            Action:
+              - ssm:SendCommand
+            Resource: '*'
+          - Sid: DescribeEc2InstancesPolicy
+            Effect: Allow
+            Action:
+              - ec2:DescribeInstances
+            Resource: '*'
+      Architectures:
+        - x86_64
+
+  CheckScriptExecutionStatusLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/check_script_status/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - Statement:
+          - Sid: ListCommandInvocationsPolicy
+            Effect: Allow
+            Action:
+              - ssm:ListCommandInvocations
+            Resource: '*'
+      Architectures:
+        - x86_64
+
+  RunBackupJobLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/run_backup_job/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - Statement:
+          - Sid: StartBackupJobPolicy
+            Effect: Allow
+            Action:
+              - backup:StartBackupJob
+              - iam:PassRole
+            Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*'
+      Architectures:
+        - x86_64
+
+  CheckBackupJobStatusLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: functions/backup_job_status/
+      Handler: app.lambda_handler
+      Runtime: python3.9
+      Policies:
+        - Statement:
+          - Sid: BackupJobStatusPolicy
+            Effect: Allow
+            Action:
+              - backup:DescribeBackupJob
+            Resource: '*'
+      Architectures:
+        - x86_64
+
+  BackupSolutionEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: "PrePostBackupSolutionEventBus"
+  BackupSolutionEventBusPolicy:
+    Type: AWS::Events::EventBusPolicy
+    Properties:
+      EventBusName: PrePostBackupSolutionEventBus
+      StatementId: "MyStatement"
+      Statement:
+        Effect: "Allow"
+        Principal: "*"
+        Action: "events:PutEvents"
+        Resource: !Sub 'arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:event-bus/${BackupSolutionEventBus}'
+
+  PrePostBackupEventsRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      EventBusName: !Ref BackupSolutionEventBus
+      Description: Ad Hoc Rule to run BackupSolution-PrePostScript
+      Name: ad-hoc-prepost-backup-rule
+      EventPattern:
+        detail-type:
+          - BackupSolution-PrePostScript
+      State: ENABLED
+      Targets:
+        - Arn: !Ref BackupWorkflowStateMachine
+          Id: Id1234
+          InputPath: $.detail
+          RetryPolicy:
+            MaximumRetryAttempts: 2
+            MaximumEventAgeInSeconds: 400
+          RoleArn: !GetAtt EventInvocationRole.Arn
+
+#  PrePostBackupEventsScheduledRule:
+#    Type: 'AWS::Events::Rule'
+#    Properties:
+#      Description: Scheduled Rule to run BackupSolution-PrePostScript
+#      Name: scheduled-prepost-backup-rule
+#      ScheduleExpression: cron(0 0 ? * FRI *))
+#      State: ENABLED
+#      Targets:
+#        - Arn: !Ref BackupWorkflowStateMachine
+#          Id: Id3456
+#          Input:
+#            Fn::ToJsonString:
+#              TargetEC2TagKey: backup-job
+#              TargetEC2TagValue: 'true'
+#              StartStopEC2Required: true
+#              RemoteRunCommandDetails:
+#                PreBackupScriptDetails:
+#                  SourceS3Path: REPLACE-WITH-YOUR-SOURCE-S3-PATH-FOR-PRE-SCRIPT
+#                  CommandToRun: pre-script.sh
+#                  WorkingDirectory: ''
+#                  TimeoutInSeconds: 600
+#                  OutputS3BucketName: backup-status-bucket-wilson
+#                  OutputS3KeyPrefix: pre-script-logs
+#                PostBackupScriptDetails:
+#                  SourceS3Path: REPLACE-WITH-YOUR-SOURCE-S3-PATH-FOR-POST-SCRIPT
+#                  CommandToRun: pre-script.sh
+#                  WorkingDirectory: ''
+#                  TimeoutInSeconds: 600
+#                  OutputS3BucketName: backup-status-bucket-wilson
+#                  OutputS3KeyPrefix: post-script-logs
+#              BackupDetails:
+#                BackupVaultName: !Ref BackupVault
+#                IamRoleArn: !Ref BackupJobExecutionRole
+#          # InputPath: $.detail
+#          RetryPolicy:
+#            MaximumRetryAttempts: 2
+#            MaximumEventAgeInSeconds: 400
+#          RoleArn: !GetAtt EventInvocationRole.Arn
+
+  EventInvocationRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - events.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: event-rule-state-machine-invocation-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartExecution
+                Resource: !Ref BackupWorkflowStateMachine
+
+  TransactionTable:
+    Type: AWS::Serverless::SimpleTable
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Properties:
+      PrimaryKey:
+        Name: SM_Execution_ID
+        Type: String
+      ProvisionedThroughput:
+        ReadCapacityUnits: 1
+        WriteCapacityUnits: 1
+
+  BackupVault:
+    Type: AWS::Backup::BackupVault
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Properties:
+      BackupVaultName: BackupSolution-Pre-Post-Script
+
+  BackupJobExecutionRole: 
+    Type: "AWS::IAM::Role"
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "backup.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+              - ec2:CreateTags
+              - ec2:DeleteSnapshot
+              Resource: arn:aws:ec2:*::snapshot/*
+            - Effect: Allow
+              Action:
+              - ec2:CreateImage
+              - ec2:DeregisterImage
+              Resource: "*"
+            - Effect: Allow
+              Action:
+              - ec2:CopyImage
+              - ec2:CopySnapshot
+              Resource: "*"
+            - Effect: Allow
+              Action:
+              - ec2:CreateTags
+              Resource: arn:aws:ec2:*:*:image/*
+            - Effect: Allow
+              Action:
+              - ec2:DescribeSnapshots
+              - ec2:DescribeTags
+              - ec2:DescribeImages
+              - ec2:DescribeInstances
+              - ec2:DescribeInstanceAttribute
+              - ec2:DescribeInstanceCreditSpecifications
+              - ec2:DescribeNetworkInterfaces
+              - ec2:DescribeElasticGpus
+              - ec2:DescribeSpotInstanceRequests
+              Resource: "*"
+            - Effect: Allow
+              Action:
+              - ec2:CreateSnapshot
+              - ec2:DeleteSnapshot
+              - ec2:DescribeVolumes
+              - ec2:DescribeSnapshots
+              Resource:
+              - arn:aws:ec2:*::snapshot/*
+              - arn:aws:ec2:*:*:volume/*
+            - Action:
+              - tag:GetResources
+              Resource: "*"
+              Effect: Allow
+            - Effect: Allow
+              Action:
+              - backup:DescribeBackupVault
+              - backup:CopyIntoBackupVault
+              Resource: arn:aws:backup:*:*:backup-vault:*      
+          PolicyName: BackupPolicy
+
+Outputs:
+  BackupWorkflowStateMachine:
+    Value: !Ref BackupWorkflowStateMachine
+  BackupVault:
+    Value: !GetAtt BackupVault.BackupVaultName
+  BackupJobExecutionRole:
+    Value: !GetAtt BackupJobExecutionRole.Arn
