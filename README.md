@@ -108,7 +108,9 @@ Based on the input parameters, the workflow will go through multiple steps where
         }
     }
     ```
-8. If you need to run the solution on a schedule, you can 
+
+## Enable Scheduled Rule (Optional)    
+If you need to run the solution on a schedule, you can 
    
    (a). Uncomment the resource **PrePostBackupEventsScheduledRule**  in template.yaml (line numbers 185-222)
    
