@@ -12,7 +12,7 @@ Based on the input parameters, the workflow will go through multiple steps where
     aws s3api create-bucket --bucket backup-status-bucket-<add-unique-string>
     ```
 
-2. Upload scripts to **backup-status-bucket-<add-unique-string>/scripts**
+2. Upload scripts to ```backup-status-bucket-<add-unique-string>/scripts ```
 
     ```
     # create a pre-script
