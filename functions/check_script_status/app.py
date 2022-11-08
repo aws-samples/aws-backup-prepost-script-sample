@@ -47,12 +47,13 @@ def checkAndUpdateStatus(script_execution_event, workflow_log, current_step):
         
     for instance in workflow_log:
         # if any of the instance state is still pending return final state as pending
+        run_command_inprogress_status = ["Pending", "InProgress", "Delayed"]
         if current_step == 'CheckPreBackupScriptStatus':
-            if instance['PreBackupScriptStatus'] == 'Pending':
+            if instance['PreBackupScriptStatus'] in run_command_inprogress_status:
                 script_execution_event.update(Status='Pending')
                 return script_execution_event, workflow_log
         elif current_step == 'CheckPostBackupScriptStatus':
-            if instance['PostBackupScriptStatus'] == 'Pending':
+            if instance['PostBackupScriptStatus'] in run_command_inprogress_status:
                 script_execution_event.update(Status='Pending')
                 return script_execution_event, workflow_log
     script_execution_event.update(Status='Success')

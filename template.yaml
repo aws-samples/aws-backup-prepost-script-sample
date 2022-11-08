@@ -127,6 +127,10 @@ Resources:
             Effect: Allow
             Action:
               - backup:StartBackupJob
+            Resource: '*'
+          - Sid: PassRolePolicy
+            Effect: Allow
+            Action:
               - iam:PassRole
             Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*'
       Architectures:
