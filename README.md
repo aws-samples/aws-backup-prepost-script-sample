@@ -115,6 +115,7 @@ Based on the input parameters, the workflow will go through multiple steps where
    (b). Edit the cron expression on line number 190 as per your requirement. [How to set CRON expression](https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-create-rule-schedule.html#eb-cron-expressions)
 
    (c). Edit the input of the target (line number 195) with appropriate information. This is the input that is used to invoke the statemachine on a schedule.
+   
    (d) Run ```sam deploy``` to update the stack created in step 6.
 
 
